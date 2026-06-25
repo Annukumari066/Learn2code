@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export let API_URL = 'http://10.18.250.182:5000';
+export let API_URL = 'https://learn2code.onrender.com';
 
 // Asynchronously load the custom URL from AsyncStorage if it exists
 AsyncStorage.getItem('custom_api_url')
