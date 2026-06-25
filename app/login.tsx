@@ -179,7 +179,10 @@ export default function LoginScreen() {
     // Construct Redirect URI
     // For Web: returns e.g. http://localhost:8081/login
     // For Mobile: returns e.g. exp://10.18.250.182:8081/--/login
-    const redirectUri = Linking.createURL('login');
+    const redirectUri =
+  Platform.OS === 'web'
+    ? 'https://learn2code-dun.vercel.app/login'
+    : Linking.createURL('login');
     console.log('[GOOGLE-SIGNIN] Redirect URI:', redirectUri);
  
     const scope = 'https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email';
