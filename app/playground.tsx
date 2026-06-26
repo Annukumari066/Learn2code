@@ -749,6 +749,8 @@ export default function Playground() {
   const [editorHeight, setEditorHeight] = useState(400);
   const [runSource, setRunSource] = useState<'local' | 'cloud' | null>(null);
   const [practiceModalVisible, setPracticeModalVisible] = useState(false);
+  const [referenceCode, setReferenceCode] = useState('');
+  const [showReferenceCode, setShowReferenceCode] = useState(false);
 
   // Handle params passed from flashcards
   useEffect(() => {
@@ -756,10 +758,13 @@ export default function Playground() {
       const langParam = String(params.language).toLowerCase() as keyof typeof TEMPLATES;
       if (TEMPLATES[langParam]) {
         setLanguage(langParam);
+        setCode(TEMPLATES[langParam]);
         if (params.code) {
-          setCode(String(params.code));
+          setReferenceCode(String(params.code));
+          setShowReferenceCode(true);
         } else {
-          setCode(TEMPLATES[langParam]);
+          setReferenceCode('');
+          setShowReferenceCode(false);
         }
       }
     }
@@ -928,55 +933,93 @@ export default function Playground() {
           </View>
 
           {/* IDE Editor Console container */}
-          <View style={styles.ideContainer}>
-
-            {/* Action Bar (Reset) */}
-            <View style={styles.ideActionBar}>
-              <Text style={styles.ideFilename}>
-                {language === 'java' ? 'Main.java' : `playground.${language === 'cpp' ? 'cpp' : language === 'c' ? 'c' : 'py'}`}
-              </Text>
-              <TouchableOpacity
-                style={styles.resetBtn}
-                onPress={handleReset}
-              >
-                <Ionicons name="reload" size={14} color="#94a3b8" style={{ marginRight: 4 }} />
-                <Text style={styles.resetBtnText}>Reset Template</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Code inputs pane - Scrolling synchronized by single parent ScrollView */}
-            <ScrollView
-              style={styles.editorScroll}
-              contentContainerStyle={styles.editorContent}
-              showsVerticalScrollIndicator={true}
-            >
-              <View style={styles.editorContainer}>
-                <TextInput
-                  multiline
-                  value={lineNumbers}
-                  style={[styles.lineNumbersText, { height: Math.max(400, editorHeight) }]}
-                  editable={false}
-                  scrollEnabled={false}
-                />
-
-                <TextInput
-                  multiline
-                  value={code}
-                  onChangeText={setCode}
-                  onContentSizeChange={(e) => {
-                    setEditorHeight(e.nativeEvent.contentSize.height);
-                  }}
-                  style={[styles.codeInput, { height: Math.max(400, editorHeight) }]}
-                  autoCapitalize="none"
-                  autoComplete="off"
-                  autoCorrect={false}
-                  spellCheck={false}
-                  placeholder="Write your code here..."
-                  placeholderTextColor="#64748b"
-                  scrollEnabled={false}
-                />
+          <View style={[styles.ideWorkspace, isMobile && styles.ideWorkspaceMobile]}>
+            {showReferenceCode && referenceCode ? (
+              <View style={[styles.referencePane, isMobile && styles.referencePaneMobile]}>
+                <View style={styles.referenceHeader}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="code-working-outline" size={16} color="#10b981" />
+                    <Text style={styles.referenceTitle}>Reference Code</Text>
+                  </View>
+                  <TouchableOpacity onPress={() => setShowReferenceCode(false)}>
+                    <Ionicons name="close" size={18} color="#94a3b8" />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView style={styles.referenceScroll}>
+                  <Text style={styles.referenceCodeText}>{referenceCode}</Text>
+                </ScrollView>
               </View>
-            </ScrollView>
+            ) : null}
+
+            <View style={styles.ideContainer}>
+              {/* Action Bar (Reset) */}
+              <View style={styles.ideActionBar}>
+                <Text style={styles.ideFilename}>
+                  {language === 'java' ? 'Main.java' : `playground.${language === 'cpp' ? 'cpp' : language === 'c' ? 'c' : 'py'}`}
+                </Text>
+                
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                  {referenceCode ? (
+                    <TouchableOpacity
+                      style={styles.referenceToggleBtn}
+                      onPress={() => setShowReferenceCode(!showReferenceCode)}
+                    >
+                      <Ionicons 
+                        name={showReferenceCode ? "eye-off" : "eye"} 
+                        size={14} 
+                        color={showReferenceCode ? "#94a3b8" : "#10b981"} 
+                        style={{ marginRight: 4 }} 
+                      />
+                      <Text style={[styles.referenceToggleBtnText, { color: showReferenceCode ? "#94a3b8" : "#10b981" }]}>
+                        {showReferenceCode ? 'Hide Reference' : 'Show Reference'}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+
+                  <TouchableOpacity
+                    style={styles.resetBtn}
+                    onPress={handleReset}
+                  >
+                    <Ionicons name="reload" size={14} color="#94a3b8" style={{ marginRight: 4 }} />
+                    <Text style={styles.resetBtnText}>Reset Template</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Code inputs pane - Scrolling synchronized by single parent ScrollView */}
+              <ScrollView
+                style={styles.editorScroll}
+                contentContainerStyle={styles.editorContent}
+                showsVerticalScrollIndicator={true}
+              >
+                <View style={styles.editorContainer}>
+                  <TextInput
+                    multiline
+                    value={lineNumbers}
+                    style={[styles.lineNumbersText, { height: Math.max(400, editorHeight) }]}
+                    editable={false}
+                    scrollEnabled={false}
+                  />
+
+                  <TextInput
+                    multiline
+                    value={code}
+                    onChangeText={setCode}
+                    onContentSizeChange={(e) => {
+                      setEditorHeight(e.nativeEvent.contentSize.height);
+                    }}
+                    style={[styles.codeInput, { height: Math.max(400, editorHeight) }]}
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    autoCorrect={false}
+                    spellCheck={false}
+                    placeholder="Write your code here..."
+                    placeholderTextColor="#64748b"
+                    scrollEnabled={false}
+                  />
+                </View>
+              </ScrollView>
+            </View>
           </View>
         </View>
 
@@ -1271,6 +1314,70 @@ const getStyles = (colors: any) => StyleSheet.create({
 
   langChipTextActive: {
     color: '#ffffff',
+  },
+
+  ideWorkspace: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 16,
+  },
+
+  ideWorkspaceMobile: {
+    flexDirection: 'column',
+  },
+
+  referencePane: {
+    flex: 0.8,
+    backgroundColor: '#181825',
+    borderRadius: 20,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: '#313244',
+    padding: 16,
+  },
+
+  referencePaneMobile: {
+    flex: 1,
+    maxHeight: 200,
+  },
+
+  referenceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#313244',
+    paddingBottom: 8,
+    marginBottom: 12,
+  },
+
+  referenceTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#cdd6f4',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+
+  referenceScroll: {
+    flex: 1,
+  },
+
+  referenceCodeText: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 13,
+    color: '#a6e3a1',
+    lineHeight: 20,
+  },
+
+  referenceToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  referenceToggleBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
   },
 
   ideContainer: {
