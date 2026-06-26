@@ -175,10 +175,13 @@ router.post('/run', async (req, res) => {
 
         const errMsg = (error.message || '') + '\n' + (stderr || '');
         const isCompilerMissing = 
+          error.code === 127 ||
+          error.code === 9009 ||
           errMsg.includes('not recognized') || 
           errMsg.includes('command not found') || 
           errMsg.includes('ENOENT') ||
-          errMsg.includes('cannot find the path');
+          errMsg.includes('cannot find the path') ||
+          errMsg.includes(': not found');
 
         if (isCompilerMissing) {
           // Execute via Cloud fallback API
