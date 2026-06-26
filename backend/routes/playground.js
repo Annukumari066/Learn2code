@@ -11,6 +11,8 @@ if (!fs.existsSync(PLAYGROUND_DIR)) {
   fs.mkdirSync(PLAYGROUND_DIR, { recursive: true });
 }
 
+const isWin = process.platform === 'win32';
+
 // Map frontend language keys to backend configs
 const LANG_CONFIG = {
   python: {
@@ -19,11 +21,11 @@ const LANG_CONFIG = {
   },
   c: {
     fileName: 'main.c',
-    command: 'gcc main.c -o main.exe && main.exe'
+    command: isWin ? 'gcc main.c -o main.exe && main.exe' : 'gcc main.c -o main && ./main'
   },
   cpp: {
     fileName: 'main.cpp',
-    command: 'g++ main.cpp -o main.exe && main.exe'
+    command: isWin ? 'g++ main.cpp -o main.exe && main.exe' : 'g++ main.cpp -o main && ./main'
   },
   java: {
     fileName: 'Main.java', // Expect Main class
