@@ -61,7 +61,8 @@ export default function LoginScreen() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [tempApiUrl, setTempApiUrl] = useState(API_URL);
   const [testingConnection, setTestingConnection] = useState(false);
-  const googleClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || '';
+  const googleClientId =
+  process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || '';
   console.log("Google Client ID:", process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID);
 
   // --- FORGOT PASSWORD MODAL ---
@@ -79,7 +80,6 @@ export default function LoginScreen() {
   // --- EFFECTS ---
   useEffect(() => {
     checkAutoLogin();
-    loadSavedGoogleClientId();
     if (Platform.OS === 'web') {
       checkWebGoogleOAuth();
     }
@@ -106,17 +106,6 @@ export default function LoginScreen() {
       console.log('[AUTO-LOGIN] Check failed:', error);
     } finally {
       setCheckingAuth(false);
-    }
-  };
-
-  const loadSavedGoogleClientId = async () => {
-    try {
-      const savedId = await AsyncStorage.getItem('google_client_id');
-      if (savedId) {
-        setGoogleClientId(savedId);
-      }
-    } catch (e) {
-      console.log(e);
     }
   };
 
@@ -253,11 +242,6 @@ export default function LoginScreen() {
       
       if (res.ok || res.status === 200 || res.status === 404 || res.status === 401) {
         await setApiUrl(testUrl);
-        if (googleClientId) {
-          await AsyncStorage.setItem('google_client_id', googleClientId.trim());
-        } else {
-          await AsyncStorage.removeItem('google_client_id');
-        }
         alert('Connected successfully! Server settings updated.');
         setShowSettingsModal(false);
       } else {
@@ -678,20 +662,6 @@ export default function LoginScreen() {
                 autoCapitalize="none"
               />
             </View>
-
-            <Text style={modalStyles.label}>Google Client ID (Optional - Web OAuth)</Text>
-            <View style={modalStyles.inputContainer}>
-              <Feather name="key" size={18} color="#94A3B8" style={{ marginRight: 8 }} />
-              <TextInput
-                style={modalStyles.input}
-                value={googleClientId}
-                onChangeText={setGoogleClientId}
-                placeholder="Enter client ID from Google Console"
-                placeholderTextColor="#94A3B8"
-                autoCapitalize="none"
-              />
-            </View>
-
             <TouchableOpacity 
               style={[modalStyles.primaryBtn, { marginTop: 12 }]}
               onPress={handleSaveAndTestSettings}
