@@ -61,7 +61,8 @@ export default function LoginScreen() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [tempApiUrl, setTempApiUrl] = useState(API_URL);
   const [testingConnection, setTestingConnection] = useState(false);
-  const [googleClientId, setGoogleClientId] = useState('');
+  const googleClientId = process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID || '';
+  console.log("Google Client ID:", process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID);
 
   // --- FORGOT PASSWORD MODAL ---
   const [showForgotModal, setShowForgotModal] = useState(false);
