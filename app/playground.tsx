@@ -751,6 +751,7 @@ export default function Playground() {
   const [practiceModalVisible, setPracticeModalVisible] = useState(false);
   const [referenceCode, setReferenceCode] = useState('');
   const [showReferenceCode, setShowReferenceCode] = useState(false);
+  const [visibleCodes, setVisibleCodes] = useState<Record<string, boolean>>({});
 
   // Handle params passed from flashcards
   useEffect(() => {
@@ -777,6 +778,7 @@ export default function Playground() {
     setOutput('');
     setErrorLog('');
     setCompilerMissing(false);
+    setVisibleCodes({});
   };
 
   // Compute line numbers on code text change
@@ -1118,13 +1120,16 @@ export default function Playground() {
 
                 <TouchableOpacity
                   style={styles.modalCloseBtn}
-                  onPress={() => setPracticeModalVisible(false)}
+                  onPress={() => {
+                    setPracticeModalVisible(false);
+                    setVisibleCodes({});
+                  }}
                 >
                   <Ionicons name="close" size={20} color="#fff" />
                 </TouchableOpacity>
               </View>
               <Text style={styles.modalSubtitle}>
-                Select a basic question to load it in the compiler playground
+                Select a basic question to view its implementation code
               </Text>
             </LinearGradient>
 
@@ -1153,20 +1158,32 @@ export default function Playground() {
                       <Text style={styles.expectedOutputText}>{q.output}</Text>
                     </View>
 
+                    {/* Code Container */}
+                    {visibleCodes[q.id] && (
+                      <View style={styles.codeContainer}>
+                        <Text style={styles.codeText}>{q.code}</Text>
+                      </View>
+                    )}
+
                     {/* Action Button */}
                     <TouchableOpacity
                       style={styles.loadQuestionBtn}
                       onPress={() => {
-                        setCode(q.code);
-                        setPracticeModalVisible(false);
-                        setOutput('');
-                        setErrorLog('');
-                        setCompilerMissing(false);
-                        setRunSource(null);
+                        setVisibleCodes((prev) => ({
+                          ...prev,
+                          [q.id]: !prev[q.id],
+                        }));
                       }}
                     >
-                      <Ionicons name="arrow-forward-outline" size={14} color="#fff" style={{ marginRight: 6 }} />
-                      <Text style={styles.loadQuestionBtnText}>Load in Editor</Text>
+                      <Ionicons 
+                        name={visibleCodes[q.id] ? "eye-off-outline" : "eye-outline"} 
+                        size={14} 
+                        color="#fff" 
+                        style={{ marginRight: 6 }} 
+                      />
+                      <Text style={styles.loadQuestionBtnText}>
+                        {visibleCodes[q.id] ? "Hide Code" : "See Code"}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 ))}
@@ -1804,5 +1821,19 @@ const getStyles = (colors: any) => StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: '#ffffff',
+  },
+  codeContainer: {
+    backgroundColor: '#181825',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#313244',
+    padding: 12,
+    marginTop: 8,
+  },
+  codeText: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 12.5,
+    color: '#a6e3a1',
+    lineHeight: 18,
   },
 });
