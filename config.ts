@@ -1,30 +1,45 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-
 export let API_URL = 'https://learn2code.onrender.com';
 
-// Asynchronously load the custom URL from AsyncStorage if it exists
-AsyncStorage.getItem('custom_api_url')
-  .then((url) => {
+export const loadApiUrl = async () => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    const AsyncStorage = (
+      await import('@react-native-async-storage/async-storage')
+    ).default;
+
+    const url = await AsyncStorage.getItem('custom_api_url');
+
     if (url) {
       API_URL = url;
       console.log('[CONFIG] API_URL initialized from storage:', API_URL);
     }
-  })
-  .catch((err) => {
+  } catch (err) {
     console.error('[CONFIG] Error loading custom API URL from storage:', err);
-  });
+  }
+};
 
-/**
- * Updates the API_URL dynamically and persists it.
- */
 export const setApiUrl = async (newUrl: string) => {
-  // Normalize URL (ensure it doesn't end with a slash for safety)
   let normalizedUrl = newUrl.trim();
+
   if (normalizedUrl.endsWith('/')) {
     normalizedUrl = normalizedUrl.slice(0, -1);
   }
-  
+
   API_URL = normalizedUrl;
-  await AsyncStorage.setItem('custom_api_url', normalizedUrl);
-  console.log('[CONFIG] API_URL updated to:', normalizedUrl);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const AsyncStorage = (
+        await import('@react-native-async-storage/async-storage')
+      ).default;
+
+      await AsyncStorage.setItem('custom_api_url', normalizedUrl);
+      console.log('[CONFIG] API_URL updated to:', normalizedUrl);
+    } catch (err) {
+      console.error('[CONFIG] Error saving API URL:', err);
+    }
+  }
 };
