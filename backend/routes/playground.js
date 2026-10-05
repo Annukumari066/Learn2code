@@ -34,7 +34,7 @@ const LANG_CONFIG = {
 };
 
 // Helper for cloud execution fallback using public Godbolt API
-async function runPistonCloud(language, code) {
+async function runPistonCloud(language, code, stdin) {
   try {
     console.log(`Running cloud execution fallback for language: ${language}`);
     
@@ -70,6 +70,9 @@ async function runPistonCloud(language, code) {
           userArguments: '',
           compilerOptions: {
             executorRequest: true
+          },
+          executeParameters: {
+            stdin: stdin || ''
           },
           filters: {
             execute: true
@@ -126,7 +129,7 @@ async function runPistonCloud(language, code) {
 
 // ================= RUN CODE ENDPOINT =================
 router.post('/run', async (req, res) => {
-  const { language, code } = req.body;
+  const { language, code, stdin } = req.body;
 
   if (!language || !code) {
     return res.status(400).json({ message: 'Language and code are required.' });
@@ -148,7 +151,7 @@ router.post('/run', async (req, res) => {
   fs.writeFileSync(filePath, code, 'utf8');
 
   // Execute child process
-  exec(
+  const child = exec(
     config.command,
     {
       cwd: runDir,
@@ -185,7 +188,7 @@ router.post('/run', async (req, res) => {
 
         if (isCompilerMissing) {
           // Execute via Cloud fallback API
-          const cloudResult = await runPistonCloud(language, code);
+          const cloudResult = await runPistonCloud(language, code, stdin);
           if (cloudResult.runSource === 'cloud') {
             return res.status(200).json({
               success: cloudResult.success,
@@ -223,6 +226,16 @@ router.post('/run', async (req, res) => {
       });
     }
   );
+
+  if (child.stdin) {
+    child.stdin.on('error', (err) => {
+      console.error('Child stdin error:', err);
+    });
+    if (stdin) {
+      child.stdin.write(stdin);
+    }
+    child.stdin.end();
+  }
 });
 
 module.exports = router;

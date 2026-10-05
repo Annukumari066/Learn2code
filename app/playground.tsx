@@ -1,20 +1,34 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  TextInput,
   ScrollView,
   ActivityIndicator,
   useWindowDimensions,
   Platform,
+  TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useTheme } from '../context/ThemeContext';
 import { API_URL } from '../config';
+import CodeEditor from '../components/CodeEditor';
+import Splitter from '../components/Splitter';
+
+const PanelGroup = (Platform.OS === 'web' ? React.lazy(() =>
+  import('react-resizable-panels').then((m: any) => ({ default: m.Group || m.default?.Group }))
+) : null) as any;
+
+const Panel = (Platform.OS === 'web' ? React.lazy(() =>
+  import('react-resizable-panels').then((m: any) => ({ default: m.Panel || m.default?.Panel }))
+) : null) as any;
+
+const PanelResizeHandle = (Platform.OS === 'web' ? React.lazy(() =>
+  import('react-resizable-panels').then((m: any) => ({ default: m.Separator || m.default?.Separator }))
+) : null) as any;
 
 const TEMPLATES = {
   python: `# Learn2Code Python Playground
@@ -751,7 +765,22 @@ export default function Playground() {
   const [practiceModalVisible, setPracticeModalVisible] = useState(false);
   const [referenceCode, setReferenceCode] = useState('');
   const [showReferenceCode, setShowReferenceCode] = useState(false);
-  const [visibleCodes, setVisibleCodes] = useState<Record<string, boolean>>({});
+
+  const [termInput, setTermInput] = useState('');
+  const wsRef = useRef<WebSocket | null>(null);
+  const terminalInputRef = useRef<TextInput | null>(null);
+  const consoleScrollRef = useRef<ScrollView | null>(null);
+
+  // Clean up WebSockets on unmount
+  useEffect(() => {
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, []);
+  const workspaceEditorHeight = 580;
+
 
   // Handle params passed from flashcards
   useEffect(() => {
@@ -778,7 +807,6 @@ export default function Playground() {
     setOutput('');
     setErrorLog('');
     setCompilerMissing(false);
-    setVisibleCodes({});
   };
 
   // Compute line numbers on code text change
@@ -788,54 +816,87 @@ export default function Playground() {
     setLineNumbers(nums);
   }, [code]);
 
-  const handleRunCode = async () => {
-    if (running) return;
+  const handleRunCode = () => {
+    if (running) {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+      return;
+    }
 
     setRunning(true);
-    setOutput('Running code...\n');
+    setOutput('Connecting to interactive console...\n');
     setErrorLog('');
     setCompilerMissing(false);
     setRunSource(null);
 
-    try {
-      const response = await fetch(`${API_URL}/api/playground/run`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          language,
-          code
-        })
-      });
+    const wsUrl = API_URL.replace(/^http/, 'ws') + '/api/playground/interactive';
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
 
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success) {
-          setOutput(data.stdout || '(Execution completed with no output logs)');
-          setRunSource(data.runSource || 'local');
-        } else {
-          setOutput(data.stdout || '');
-          setRunSource(data.runSource || null);
-          if (data.error === 'COMPILER_MISSING') {
-            setCompilerMissing(true);
-            setErrorLog(`Warning: System missing compiler/interpreter for ${language.toUpperCase()}`);
-          } else if (data.error === 'TIMEOUT') {
-            setErrorLog('Execution Timeout: 5 seconds runtime limit exceeded.');
-          } else {
-            setErrorLog(data.stderr || data.error || 'Execution failed.');
-          }
+    ws.onopen = () => {
+      setOutput('');
+      ws.send(JSON.stringify({
+        type: 'start',
+        language,
+        code
+      }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'stdout') {
+          setOutput((prev) => prev + msg.data);
+          setTimeout(() => {
+            consoleScrollRef.current?.scrollToEnd({ animated: true });
+          }, 50);
+        } else if (msg.type === 'stderr') {
+          setErrorLog((prev) => prev + msg.data);
+          setTimeout(() => {
+            consoleScrollRef.current?.scrollToEnd({ animated: true });
+          }, 50);
+        } else if (msg.type === 'compile_error') {
+          setErrorLog(msg.data);
+        } else if (msg.type === 'error') {
+          setErrorLog(msg.data);
+        } else if (msg.type === 'exit') {
+          // Finished
         }
-      } else {
-        const errorText = await response.text();
-        setErrorLog(`Server error: ${response.status} - ${errorText || 'Internal Server Error'}`);
+      } catch (e) {
+        console.error('Error parsing WebSocket message:', e);
       }
-    } catch (err) {
-      console.log('Error running code:', err);
-      setErrorLog('Failed to connect to compiler server. Please verify your backend server is running.');
-    } finally {
+    };
+
+    ws.onerror = (err) => {
+      console.error('WebSocket execution error:', err);
+      setErrorLog('Connection error. Failed to run program on the server.');
+    };
+
+    ws.onclose = () => {
       setRunning(false);
+      wsRef.current = null;
+    };
+  };
+
+  const handleSendInput = () => {
+    if (!termInput) return;
+
+    // Append to console logs
+    setOutput((prev) => prev + termInput + '\n');
+
+    // Send input chunk to backend
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'stdin',
+        data: termInput + '\n'
+      }));
     }
+
+    setTermInput('');
+    setTimeout(() => {
+      terminalInputRef.current?.focus();
+    }, 50);
   };
 
   const handleReset = () => {
@@ -844,6 +905,7 @@ export default function Playground() {
     setErrorLog('');
     setCompilerMissing(false);
     setRunSource(null);
+    setTermInput('');
   };
 
   const languages: { key: keyof typeof TEMPLATES; name: string; icon: string }[] = [
@@ -852,6 +914,96 @@ export default function Playground() {
     { key: 'cpp', name: 'C++', icon: 'settings-outline' },
     { key: 'java', name: 'Java', icon: 'cafe-outline' }
   ];
+
+  const renderEditorHeader = () => {
+    return (
+      <View style={styles.editorHeaderRow}>
+        {/* Left: Language selector tabs */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.editorHeaderLeft}
+          style={{ flex: 1, minWidth: 0 }}
+        >
+          {languages.map((item) => {
+            const active = language === item.key;
+            return (
+              <TouchableOpacity
+                key={item.key}
+                style={[styles.editorTab, active && styles.editorTabActive]}
+                onPress={() => handleLanguageChange(item.key)}
+              >
+                <Ionicons
+                  name={item.icon as any}
+                  size={13}
+                  color={active ? '#fff' : '#94a3b8'}
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[styles.editorTabText, active && styles.editorTabTextActive]}>
+                  {item.name}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+
+        {/* Right: Actions */}
+        <View style={styles.editorHeaderRight}>
+          {/* Practice Questions */}
+          <TouchableOpacity
+            style={[styles.actionHeaderBtn, styles.practiceHeaderBtn]}
+            onPress={() => setPracticeModalVisible(true)}
+          >
+            <Ionicons name="help-circle-outline" size={15} color="#ffffff" style={!isMobile ? { marginRight: 4 } : undefined} />
+            {!isMobile && <Text style={styles.actionHeaderBtnText}>Practice</Text>}
+          </TouchableOpacity>
+
+          {/* Toggle Reference */}
+          {referenceCode ? (
+            <TouchableOpacity
+              style={styles.actionHeaderBtn}
+              onPress={() => setShowReferenceCode(!showReferenceCode)}
+            >
+              <Ionicons 
+                name={showReferenceCode ? "eye-off" : "eye"} 
+                size={14} 
+                color={showReferenceCode ? "#94a3b8" : "#10b981"} 
+                style={!isMobile ? { marginRight: 4 } : undefined}
+              />
+              {!isMobile && (
+                <Text style={[styles.actionHeaderBtnText, { color: showReferenceCode ? "#94a3b8" : "#10b981" }]}>
+                  Reference
+                </Text>
+              )}
+            </TouchableOpacity>
+          ) : null}
+
+          {/* Reset Template */}
+          <TouchableOpacity
+            style={styles.actionHeaderBtn}
+            onPress={handleReset}
+          >
+            <Ionicons name="reload" size={13} color="#94a3b8" style={!isMobile ? { marginRight: 4 } : undefined} />
+            {!isMobile && <Text style={styles.actionHeaderBtnText}>Reset</Text>}
+          </TouchableOpacity>
+
+          {/* Run Code */}
+          <TouchableOpacity
+            style={[styles.runHeaderBtn, running && styles.runBtnDisabled]}
+            onPress={handleRunCode}
+            disabled={running}
+          >
+            {running ? (
+              <ActivityIndicator size="small" color="#fff" style={!isMobile ? { marginRight: 4 } : undefined} />
+            ) : (
+              <Ionicons name="play" size={13} color="#fff" style={!isMobile ? { marginRight: 4 } : undefined} />
+            )}
+            {!isMobile && <Text style={styles.runHeaderBtnText}>{running ? 'Running...' : 'Run'}</Text>}
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
 
   return (
     <LinearGradient
@@ -875,230 +1027,381 @@ export default function Playground() {
 
           <Text style={styles.headerTitle}>Interactive Playground</Text>
 
-          <TouchableOpacity
-            style={[styles.runBtn, running && styles.runBtnDisabled]}
-            onPress={handleRunCode}
-            disabled={running}
-          >
-            {running ? (
-              <ActivityIndicator size="small" color="#fff" style={{ marginRight: 6 }} />
-            ) : (
-              <Ionicons name="play" size={18} color="#fff" style={{ marginRight: 6 }} />
-            )}
-            <Text style={styles.runBtnText}>{running ? 'Running...' : 'Run Code'}</Text>
-          </TouchableOpacity>
+          <View style={{ width: 40 }} />
         </View>
       </LinearGradient>
 
       {/* Main Workspace layout */}
-      <View style={[styles.workspace, isMobile && styles.workspaceMobile]}>
+      {Platform.OS === 'web' && !isMobile && PanelGroup && Panel && PanelResizeHandle ? (
+        <React.Suspense fallback={<ActivityIndicator size="large" color="#10b981" style={{ marginTop: 40 }} />}>
+          <style>{`
+            .custom-resize-handle {
+              height: 6px;
+              background-color: #11111b;
+              border-top: 1.5px solid #313244;
+              cursor: row-resize;
+              position: relative;
+              transition: background-color 0.15s ease, border-top-color 0.15s ease;
+              z-index: 10;
+            }
 
-        {/* Left pane: Language Selector & Editor */}
-        <View style={[styles.editorPane, isMobile && styles.editorPaneMobile]}>
+            .custom-resize-handle:hover,
+            .custom-resize-handle[data-active] {
+              background-color: #007acc;
+              border-top-color: #007acc;
+            }
 
-          {/* Language Selector chips - Constrained Height to prevent stretching */}
-          <View style={styles.langSelectorContainer}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.langSelectorRow}
-            >
-              {languages.map((item) => {
-                const active = language === item.key;
-                return (
-                  <TouchableOpacity
-                    key={item.key}
-                    style={[styles.langChip, active && styles.langChipActive]}
-                    onPress={() => handleLanguageChange(item.key)}
-                  >
-                    <Ionicons
-                      name={item.icon as any}
-                      size={14}
-                      color={active ? '#fff' : '#05506b'}
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text style={[styles.langChipText, active && styles.langChipTextActive]}>
-                      {item.name}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+            .custom-vertical-resize-handle {
+              width: 6px;
+              background-color: #11111b;
+              border-left: 1.5px solid #313244;
+              cursor: col-resize;
+              position: relative;
+              transition: background-color 0.15s ease, border-left-color 0.15s ease;
+              z-index: 10;
+            }
 
-              <TouchableOpacity
-                style={styles.practiceBtn}
-                onPress={() => setPracticeModalVisible(true)}
-              >
-                <Ionicons name="help-circle-outline" size={16} color="#ffffff" style={{ marginRight: 6 }} />
-                <Text style={styles.practiceBtnText}>Practice Questions</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
+            .custom-vertical-resize-handle:hover,
+            .custom-vertical-resize-handle[data-active] {
+              background-color: #007acc;
+              border-left-color: #007acc;
+            }
+          `}</style>
 
-          {/* IDE Editor Console container */}
-          <View style={[styles.ideWorkspace, isMobile && styles.ideWorkspaceMobile]}>
+    <View style={styles.mergedContainer}>
+     <PanelGroup orientation="vertical" style={{ flex: 1 }}>
+     <Panel collapsible={false} defaultSize={65} minSize={20}>
+      <View style={[styles.editorPane, { flex: 1, height: '100%' }]}>
+        <View style={[styles.ideContainer, styles.ideContainerStandalone, { flex: 1, height: '100%' }]}>
+          {renderEditorHeader()}
+          <View style={{ flexDirection: 'row', flex: 1, height: '100%' }}>
             {showReferenceCode && referenceCode ? (
-              <View style={[styles.referencePane, isMobile && styles.referencePaneMobile]}>
-                <View style={styles.referenceHeader}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="code-working-outline" size={16} color="#10b981" />
-                    <Text style={styles.referenceTitle}>Reference Code</Text>
+              <View style={[styles.referencePane, { width: '30%', flex: 0, flexBasis: '30%', height: '100%', borderRadius: 0, borderRightWidth: 1.5, borderColor: '#313244', backgroundColor: 'transparent' }]}>
+                <View style={[styles.referenceHeader, { minWidth: 0, overflow: 'hidden' }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0, flexShrink: 1, overflow: 'hidden' }}>
+                    <Ionicons name="code-working-outline" size={16} color="#10b981" style={{ flexShrink: 0 }} />
+                    <Text style={[styles.referenceTitle, { flexShrink: 1 }]} numberOfLines={1}>Reference Code</Text>
                   </View>
-                  <TouchableOpacity onPress={() => setShowReferenceCode(false)}>
+                  <TouchableOpacity onPress={() => setShowReferenceCode(false)} style={{ flexShrink: 0 }}>
                     <Ionicons name="close" size={18} color="#94a3b8" />
                   </TouchableOpacity>
                 </View>
-                <ScrollView style={styles.referenceScroll}>
-                  <Text style={styles.referenceCodeText}>{referenceCode}</Text>
+                <ScrollView style={[styles.referenceScroll, { minWidth: 0 }]} contentContainerStyle={{ minWidth: 0 }}>
+                  <Text style={[styles.referenceCodeText, { minWidth: 0 }]}>{referenceCode}</Text>
                 </ScrollView>
               </View>
             ) : null}
 
-            <View style={styles.ideContainer}>
-              {/* Action Bar (Reset) */}
-              <View style={styles.ideActionBar}>
-                <Text style={styles.ideFilename}>
-                  {language === 'java' ? 'Main.java' : `playground.${language === 'cpp' ? 'cpp' : language === 'c' ? 'c' : 'py'}`}
-                </Text>
-                
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-                  {referenceCode ? (
+            <View style={{ flex: 1, height: '100%' }}>
+              <CodeEditor
+                value={code}
+                onChange={setCode}
+                language={language}
+                isDark={isDark}
+                editorHeight={editorHeight}
+                setEditorHeight={setEditorHeight}
+                lineNumbers={lineNumbers}
+              />
+            </View>
+          </View>
+        </View>
+      </View>
+    </Panel>
+
+            <PanelResizeHandle className="custom-resize-handle" />
+
+            <Panel collapsible={false} defaultSize={35} minSize={15}>
+              <View 
+                style={[
+                  styles.consolePane, 
+                  isMobile && styles.consolePaneMobile,
+                  (!isMobile && Platform.OS === 'web') && ({ flex: 1, height: '100%', overflow: 'auto' } as any)
+                ]}
+              >
+                <View style={styles.consoleHeader}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1 }}>
+                    <Ionicons name="terminal-outline" size={16} color="#94a3b8" style={{ marginRight: 6 }} />
+                    <Text style={styles.consoleTitle} numberOfLines={1}>Console Output</Text>
+
+                    {runSource === 'local' && (
+                      <View style={[styles.runSourceBadge, styles.runSourceBadgeLocal]}>
+                        <Text style={styles.runSourceBadgeText}>💻 Local Run</Text>
+                      </View>
+                    )}
+                    {runSource === 'cloud' && (
+                      <View style={[styles.runSourceBadge, styles.runSourceBadgeCloud]}>
+                        <Text style={styles.runSourceBadgeText}>☁️ Cloud Run</Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                     <TouchableOpacity
-                      style={styles.referenceToggleBtn}
-                      onPress={() => setShowReferenceCode(!showReferenceCode)}
+                      onPress={() => { setOutput(''); setErrorLog(''); setCompilerMissing(false); setRunSource(null); }}
+                      style={styles.clearBtn}
                     >
-                      <Ionicons 
-                        name={showReferenceCode ? "eye-off" : "eye"} 
-                        size={14} 
-                        color={showReferenceCode ? "#94a3b8" : "#10b981"} 
-                        style={{ marginRight: 4 }} 
-                      />
-                      <Text style={[styles.referenceToggleBtnText, { color: showReferenceCode ? "#94a3b8" : "#10b981" }]}>
-                        {showReferenceCode ? 'Hide Reference' : 'Show Reference'}
-                      </Text>
+                      <Text style={styles.clearBtnText}>Clear Console</Text>
                     </TouchableOpacity>
+                  </View>
+                </View>
+
+                <ScrollView
+                  ref={consoleScrollRef}
+                  style={styles.consoleScroll}
+                  contentContainerStyle={styles.consoleOutputContainer}
+                >
+                  {output ? (
+                    <Text style={styles.consoleOutputText}>{output}</Text>
                   ) : null}
 
-                  <TouchableOpacity
-                    style={styles.resetBtn}
-                    onPress={handleReset}
+                  {errorLog ? (
+                    <Text style={styles.consoleErrorText}>{errorLog}</Text>
+                  ) : null}
+
+                  {running && (
+                    <View style={styles.termInputRow}>
+                      <Text style={styles.termPromptIndicator}>&gt;</Text>
+                      <TextInput
+                        ref={terminalInputRef}
+                        value={termInput}
+                        onChangeText={setTermInput}
+                        onSubmitEditing={handleSendInput}
+                        style={styles.termInput}
+                        autoCapitalize="none"
+                        autoComplete="off"
+                        autoCorrect={false}
+                        spellCheck={false}
+                        blurOnSubmit={false}
+                        placeholder="Type input here and press Enter..."
+                        placeholderTextColor="#585b70"
+                      />
+                    </View>
+                  )}
+
+                  {compilerMissing && (
+                    <View style={styles.warningCard}>
+                      <View style={styles.warningHeader}>
+                        <Ionicons name="warning" size={18} color="#b91c1c" />
+                        <Text style={styles.warningTitle}>Compiler / Interpreter Not Found</Text>
+                      </View>
+                      <Text style={styles.warningText}>
+                        The runtime environment for <Text style={{ fontWeight: 'bold' }}>{language.toUpperCase()}</Text> is not installed or configured on your system PATH.
+                      </Text>
+                      <View style={styles.solutionBox}>
+                        <Text style={styles.solutionTitle}>💡 Quick Resolution:</Text>
+                        {language === 'c' || language === 'cpp' ? (
+                          <Text style={styles.solutionText}>
+                            • Install GCC/MinGW (C/C++ compiler) and make sure it is added to your environment variables.
+                          </Text>
+                        ) : null}
+                        {language === 'java' ? (
+                          <Text style={styles.solutionText}>
+                            • Install JDK (Java Development Kit) and verify that &apos;javac&apos; and &apos;java&apos; commands are on your system variables path.
+                          </Text>
+                        ) : null}
+                        {language === 'python' ? (
+                          <Text style={styles.solutionText}>
+                            • Install Python from python.org. Check &quot;Add Python to PATH&quot; during installation.
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                  )}
+
+                  {!output && !errorLog && !compilerMissing && (
+                    <Text style={styles.consolePlaceholder}>
+                      Click the &quot;Run Code&quot; button above to see compilation &amp; execution logs.
+                    </Text>
+                  )}
+                </ScrollView>
+              </View>
+            </Panel>
+            </PanelGroup>
+          </View>
+        </React.Suspense>
+      ) : (
+        <View 
+          id="playground-workspace"
+          style={[
+            styles.workspace, 
+            isMobile && styles.workspaceMobile
+          ]}
+        >
+          {/* Left/Top pane: Language Selector & Editor */}
+          <View 
+            style={[
+              styles.editorPane, 
+              isMobile && styles.editorPaneMobile,
+              (!isMobile && Platform.OS === 'web') && { height: workspaceEditorHeight, flex: undefined }
+            ]}
+          >
+            {/* IDE Editor Console container */}
+            <View 
+              id="playground-ide-workspace"
+              style={[styles.ideContainer, styles.ideContainerStandalone, { flex: 1 }]}
+            >
+              {renderEditorHeader()}
+              <View style={{ flexDirection: isMobile ? 'column' : 'row', flex: 1 }}>
+                {showReferenceCode && referenceCode ? (
+                  <View 
+                    style={[
+                      styles.referencePane, 
+                      isMobile && styles.referencePaneMobile,
+                      !isMobile && { width: '30%', flex: 0, flexBasis: '30%', borderRadius: 0, borderRightWidth: 1.5, borderColor: '#313244', backgroundColor: 'transparent' }
+                    ]}
                   >
-                    <Ionicons name="reload" size={14} color="#94a3b8" style={{ marginRight: 4 }} />
-                    <Text style={styles.resetBtnText}>Reset Template</Text>
-                  </TouchableOpacity>
+                    <View style={styles.referenceHeader}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Ionicons name="code-working-outline" size={16} color="#10b981" />
+                        <Text style={styles.referenceTitle}>Reference Code</Text>
+                      </View>
+                      <TouchableOpacity onPress={() => setShowReferenceCode(false)}>
+                        <Ionicons name="close" size={18} color="#94a3b8" />
+                      </TouchableOpacity>
+                    </View>
+                    <ScrollView style={styles.referenceScroll}>
+                      <Text style={styles.referenceCodeText}>{referenceCode}</Text>
+                    </ScrollView>
+                  </View>
+                ) : null}
+
+                <View style={{ flex: 1 }}>
+                  {Platform.OS === 'web' ? (
+                    <CodeEditor
+                      value={code}
+                      onChange={setCode}
+                      language={language}
+                      isDark={isDark}
+                      editorHeight={editorHeight}
+                      setEditorHeight={setEditorHeight}
+                      lineNumbers={lineNumbers}
+                    />
+                  ) : (
+                    <ScrollView
+                      style={styles.editorScroll}
+                      contentContainerStyle={styles.editorContent}
+                      showsVerticalScrollIndicator={true}
+                    >
+                      <CodeEditor
+                        value={code}
+                        onChange={setCode}
+                        language={language}
+                        isDark={isDark}
+                        editorHeight={editorHeight}
+                        setEditorHeight={setEditorHeight}
+                        lineNumbers={lineNumbers}
+                      />
+                    </ScrollView>
+                  )}
                 </View>
               </View>
+            </View>
+          </View>
 
-              {/* Code inputs pane - Scrolling synchronized by single parent ScrollView */}
-              <ScrollView
-                style={styles.editorScroll}
-                contentContainerStyle={styles.editorContent}
-                showsVerticalScrollIndicator={true}
-              >
-                <View style={styles.editorContainer}>
-                  <TextInput
-                    multiline
-                    value={lineNumbers}
-                    style={[styles.lineNumbersText, { height: Math.max(400, editorHeight) }]}
-                    editable={false}
-                    scrollEnabled={false}
-                  />
+          {/* Right/Bottom pane: Console Terminal */}
+          <View 
+            style={[
+              styles.consolePane, 
+              styles.consolePaneStandalone,
+              isMobile && styles.consolePaneMobile,
+              (!isMobile && Platform.OS === 'web') && { flex: 1 }
+            ]}
+          >
+            <View style={styles.consoleHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', flexShrink: 1 }}>
+                <Ionicons name="terminal-outline" size={16} color="#94a3b8" style={{ marginRight: 6 }} />
+                <Text style={styles.consoleTitle} numberOfLines={1}>Console Output</Text>
 
+                {runSource === 'local' && (
+                  <View style={[styles.runSourceBadge, styles.runSourceBadgeLocal]}>
+                    <Text style={styles.runSourceBadgeText}>💻 Local Run</Text>
+                  </View>
+                )}
+                {runSource === 'cloud' && (
+                  <View style={[styles.runSourceBadge, styles.runSourceBadgeCloud]}>
+                    <Text style={styles.runSourceBadgeText}>☁️ Cloud Run</Text>
+                  </View>
+                )}
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                <TouchableOpacity
+                  onPress={() => { setOutput(''); setErrorLog(''); setCompilerMissing(false); setRunSource(null); }}
+                  style={styles.clearBtn}
+                >
+                  <Text style={styles.clearBtnText}>Clear Console</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <ScrollView
+              ref={consoleScrollRef}
+              style={styles.consoleScroll}
+              contentContainerStyle={styles.consoleOutputContainer}
+            >
+              {output ? (
+                <Text style={styles.consoleOutputText}>{output}</Text>
+              ) : null}
+
+              {errorLog ? (
+                <Text style={styles.consoleErrorText}>{errorLog}</Text>
+              ) : null}
+
+              {running && (
+                <View style={styles.termInputRow}>
+                  <Text style={styles.termPromptIndicator}>&gt;</Text>
                   <TextInput
-                    multiline
-                    value={code}
-                    onChangeText={setCode}
-                    onContentSizeChange={(e) => {
-                      setEditorHeight(e.nativeEvent.contentSize.height);
-                    }}
-                    style={[styles.codeInput, { height: Math.max(400, editorHeight) }]}
+                    ref={terminalInputRef}
+                    value={termInput}
+                    onChangeText={setTermInput}
+                    onSubmitEditing={handleSendInput}
+                    style={styles.termInput}
                     autoCapitalize="none"
                     autoComplete="off"
                     autoCorrect={false}
                     spellCheck={false}
-                    placeholder="Write your code here..."
-                    placeholderTextColor="#64748b"
-                    scrollEnabled={false}
+                    blurOnSubmit={false}
+                    placeholder="Type input here and press Enter..."
+                    placeholderTextColor="#585b70"
                   />
                 </View>
-              </ScrollView>
-            </View>
-          </View>
-        </View>
+              )}
 
-        {/* Right pane: Console Terminal */}
-        <View style={[styles.consolePane, isMobile && styles.consolePaneMobile]}>
-          <View style={styles.consoleHeader}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Ionicons name="terminal-outline" size={16} color="#94a3b8" style={{ marginRight: 6 }} />
-              <Text style={styles.consoleTitle}>Console Output</Text>
-
-              {runSource === 'local' && (
-                <View style={[styles.runSourceBadge, styles.runSourceBadgeLocal]}>
-                  <Text style={styles.runSourceBadgeText}>💻 Local Run</Text>
+              {compilerMissing && (
+                <View style={styles.warningCard}>
+                  <View style={styles.warningHeader}>
+                    <Ionicons name="warning" size={18} color="#b91c1c" />
+                    <Text style={styles.warningTitle}>Compiler / Interpreter Not Found</Text>
+                  </View>
+                  <Text style={styles.warningText}>
+                    The runtime environment for <Text style={{ fontWeight: 'bold' }}>{language.toUpperCase()}</Text> is not installed or configured on your system PATH.
+                  </Text>
+                  <View style={styles.solutionBox}>
+                    <Text style={styles.solutionTitle}>💡 Quick Resolution:</Text>
+                    {language === 'c' || language === 'cpp' ? (
+                      <Text style={styles.solutionText}>
+                        • Install GCC/MinGW (C/C++ compiler) and make sure it is added to your environment variables.
+                      </Text>
+                    ) : null}
+                    {language === 'java' ? (
+                      <Text style={styles.solutionText}>
+                        • Install JDK (Java Development Kit) and verify that &apos;javac&apos; and &apos;java&apos; commands are on your system variables path.
+                      </Text>
+                    ) : null}
+                    {language === 'python' ? (
+                      <Text style={styles.solutionText}>
+                        • Install Python from python.org. Check &quot;Add Python to PATH&quot; during installation.
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
               )}
-              {runSource === 'cloud' && (
-                <View style={[styles.runSourceBadge, styles.runSourceBadgeCloud]}>
-                  <Text style={styles.runSourceBadgeText}>☁️ Cloud Run</Text>
-                </View>
+
+              {!output && !errorLog && !compilerMissing && (
+                <Text style={styles.consolePlaceholder}>Click &quot;Run Code&quot; to compile and run your script...</Text>
               )}
-            </View>
-            <TouchableOpacity
-              onPress={() => { setOutput(''); setErrorLog(''); setCompilerMissing(false); setRunSource(null); }}
-              style={styles.clearBtn}
-            >
-              <Text style={styles.clearBtnText}>Clear Console</Text>
-            </TouchableOpacity>
+            </ScrollView>
           </View>
-
-          <ScrollView
-            style={styles.consoleScroll}
-            contentContainerStyle={styles.consoleOutputContainer}
-          >
-            {output ? (
-              <Text style={styles.consoleOutputText}>{output}</Text>
-            ) : null}
-
-            {errorLog ? (
-              <Text style={styles.consoleErrorText}>{errorLog}</Text>
-            ) : null}
-
-            {compilerMissing && (
-              <View style={styles.warningCard}>
-                <View style={styles.warningHeader}>
-                  <Ionicons name="warning" size={18} color="#b91c1c" />
-                  <Text style={styles.warningTitle}>Compiler / Interpreter Not Found</Text>
-                </View>
-                <Text style={styles.warningText}>
-                  The runtime environment for <Text style={{ fontWeight: 'bold' }}>{language.toUpperCase()}</Text> is not installed or configured on your system PATH.
-                </Text>
-                <View style={styles.solutionBox}>
-                  <Text style={styles.solutionTitle}>💡 Quick Resolution:</Text>
-                  {language === 'c' || language === 'cpp' ? (
-                    <Text style={styles.solutionText}>
-                      • Install GCC/MinGW (C/C++ compiler) and make sure it is added to your environment variables.
-                    </Text>
-                  ) : null}
-                  {language === 'java' ? (
-                    <Text style={styles.solutionText}>
-                      • Install JDK (Java Development Kit) and verify that &apos;javac&apos; and &apos;java&apos; commands are on your system variables path.
-                    </Text>
-                  ) : null}
-                  {language === 'python' ? (
-                    <Text style={styles.solutionText}>
-                      • Install Python from python.org. Check &quot;Add Python to PATH&quot; during installation.
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-            )}
-
-            {!output && !errorLog && !compilerMissing && (
-              <Text style={styles.consolePlaceholder}>Click &quot;Run Code&quot; to compile and run your script...</Text>
-            )}
-          </ScrollView>
         </View>
-      </View>
+      )}
 
       {/* Practice Questions Modal Overlay */}
       {practiceModalVisible && (
@@ -1122,7 +1425,6 @@ export default function Playground() {
                   style={styles.modalCloseBtn}
                   onPress={() => {
                     setPracticeModalVisible(false);
-                    setVisibleCodes({});
                   }}
                 >
                   <Ionicons name="close" size={20} color="#fff" />
@@ -1158,31 +1460,23 @@ export default function Playground() {
                       <Text style={styles.expectedOutputText}>{q.output}</Text>
                     </View>
 
-                    {/* Code Container */}
-                    {visibleCodes[q.id] && (
-                      <View style={styles.codeContainer}>
-                        <Text style={styles.codeText}>{q.code}</Text>
-                      </View>
-                    )}
-
                     {/* Action Button */}
                     <TouchableOpacity
                       style={styles.loadQuestionBtn}
                       onPress={() => {
-                        setVisibleCodes((prev) => ({
-                          ...prev,
-                          [q.id]: !prev[q.id],
-                        }));
+                        setReferenceCode(q.code);
+                        setShowReferenceCode(true);
+                        setPracticeModalVisible(false);
                       }}
                     >
                       <Ionicons 
-                        name={visibleCodes[q.id] ? "eye-off-outline" : "eye-outline"} 
+                        name="eye-outline" 
                         size={14} 
                         color="#fff" 
                         style={{ marginRight: 6 }} 
                       />
                       <Text style={styles.loadQuestionBtnText}>
-                        {visibleCodes[q.id] ? "Hide Code" : "See Code"}
+                        See Code
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -1200,15 +1494,23 @@ const getStyles = (colors: any) => StyleSheet.create({
   container: {
     flex: 1,
     width: '100%',
-    height: '100%',
+    ...Platform.select({
+      web: {
+        height: '100vh',
+        overflow: 'hidden',
+      } as any,
+      default: {
+        height: '100%',
+      },
+    }),
   },
 
   header: {
-    paddingTop: Platform.OS === 'ios' ? 48 : 20,
-    paddingBottom: 16,
+    paddingTop: Platform.OS === 'ios' ? 36 : 10,
+    paddingBottom: 10,
     paddingHorizontal: 20,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
+    borderBottomLeftRadius: 16,
+    borderBottomRightRadius: 16,
   },
 
   headerRow: {
@@ -1257,9 +1559,8 @@ const getStyles = (colors: any) => StyleSheet.create({
 
   workspace: {
     flex: 1,
-    flexDirection: 'row',
+    flexDirection: 'column',
     padding: 16,
-    gap: 16,
   },
 
   workspaceMobile: {
@@ -1269,6 +1570,7 @@ const getStyles = (colors: any) => StyleSheet.create({
   editorPane: {
     flex: 1.2,
     flexDirection: 'column',
+    height: '100%',
   },
 
   editorPaneMobile: {
@@ -1278,8 +1580,11 @@ const getStyles = (colors: any) => StyleSheet.create({
   consolePane: {
     flex: 0.8,
     backgroundColor: '#090d16',
-    borderRadius: 20,
     overflow: 'hidden',
+  },
+
+  consolePaneStandalone: {
+    borderRadius: 20,
     borderWidth: 1.5,
     borderColor: '#1e293b',
     shadowColor: '#000',
@@ -1337,6 +1642,7 @@ const getStyles = (colors: any) => StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     gap: 16,
+    height: '100%',
   },
 
   ideWorkspaceMobile: {
@@ -1344,7 +1650,8 @@ const getStyles = (colors: any) => StyleSheet.create({
   },
 
   referencePane: {
-    flex: 0.8,
+    flex: 1,
+    minWidth: 0,
     backgroundColor: '#181825',
     borderRadius: 20,
     overflow: 'hidden',
@@ -1399,9 +1706,14 @@ const getStyles = (colors: any) => StyleSheet.create({
 
   ideContainer: {
     flex: 1,
-    backgroundColor: '#1e1e2e',
-    borderRadius: 20,
+    minWidth: 0,
+    backgroundColor: colors.surface,
     overflow: 'hidden',
+    height: '100%',
+  },
+
+  ideContainerStandalone: {
+    borderRadius: 20,
     borderWidth: 1.5,
     borderColor: '#313244',
   },
@@ -1835,5 +2147,130 @@ const getStyles = (colors: any) => StyleSheet.create({
     fontSize: 12.5,
     color: '#a6e3a1',
     lineHeight: 18,
+  },
+  editorHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#11111b',
+    borderBottomWidth: 1.5,
+    borderBottomColor: '#313244',
+    paddingHorizontal: 12,
+    height: 48,
+    minWidth: 0,
+  },
+  editorHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  editorHeaderRight: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  flexShrink: 0,
+},
+  editorTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: 'transparent',
+    height: 32,
+  },
+  editorTabActive: {
+    backgroundColor: '#1e1e2e',
+    borderWidth: 1,
+    borderColor: '#313244',
+  },
+  editorTabText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#94a3b8',
+  },
+  editorTabTextActive: {
+    color: '#ffffff',
+  },
+  actionHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    backgroundColor: '#1e293b',
+    height: 28,
+  },
+  actionHeaderBtnText: {
+    fontSize: 11,
+    color: '#cbd5e1',
+    fontWeight: '600',
+  },
+  practiceHeaderBtn: {
+    backgroundColor: '#0369a1',
+  },
+  resetHeaderBtn: {
+    backgroundColor: '#334155',
+  },
+  runHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: '#10b981',
+    height: 28,
+  },
+  runHeaderBtnText: {
+    fontSize: 11,
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+  mergedContainer: {
+    flex: 1,
+    backgroundColor: '#1e1e2e',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderBottomWidth: 0,
+    borderColor: '#313244',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 4,
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 0,
+  },
+  termInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 16,
+    backgroundColor: '#0c101a',
+    borderTopWidth: 1,
+    borderTopColor: '#192231',
+  },
+  termPromptIndicator: {
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 14,
+    color: '#3b82f6',
+    fontWeight: '800',
+    marginRight: 8,
+  },
+  termInput: {
+    flex: 1,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    fontSize: 13,
+    color: '#cdd6f4',
+    padding: 0,
+    margin: 0,
+    height: 24,
+    ...Platform.select({
+      web: {
+        outlineStyle: 'none',
+      } as any,
+    }),
   },
 });
